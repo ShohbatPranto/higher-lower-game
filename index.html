@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Higher or Lower: Online Showdown</title>
-    <!-- PeerJS for Serverless Online Multiplayer -->
+    <title>Higher or Lower: PvP Showdown</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
     <style>
         :root {
@@ -50,16 +49,18 @@
         h1 { font-size: 2.2rem; margin-bottom: 5px; font-weight: 800; }
         .subtitle { color: var(--text-muted); margin-bottom: 20px; font-size: 0.95rem; }
 
-        /* Screens */
-        #gameScreen { display: none; }
+        /* Screen Visibility */
+        #setupScreen, #gameScreen, #waitingScreen { display: none; }
         
-        .lobby-panel {
+        .lobby-panel, .setup-panel {
             background: #f8fafc;
             border: 2px dashed #cbd5e1;
             border-radius: 16px;
             padding: 30px;
             margin-top: 20px;
         }
+
+        .setup-panel { border-color: var(--primary); }
 
         .link-box {
             display: flex;
@@ -99,13 +100,20 @@
             border-radius: 50px;
             font-weight: 700;
             font-size: 1.2rem;
-            margin-bottom: 25px;
+            margin-bottom: 10px;
             color: white;
             transition: background-color 0.3s;
         }
 
         .turn-p1 { background-color: var(--p1-color); }
         .turn-p2 { background-color: var(--p2-color); }
+
+        .target-hint {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
 
         .input-section {
             display: flex;
@@ -115,7 +123,7 @@
         }
 
         input[type="number"] {
-            width: 120px;
+            width: 140px;
             padding: 15px;
             font-size: 1.5rem;
             border: 2px solid #cbd5e1;
@@ -151,8 +159,8 @@
             overflow-y: auto;
         }
 
-        .p1-history h3 { color: var(--p1-color); margin-bottom: 10px; }
-        .p2-history h3 { color: var(--p2-color); margin-bottom: 10px; }
+        .p1-history h3 { color: var(--p1-color); margin-bottom: 10px; font-size: 1rem;}
+        .p2-history h3 { color: var(--p2-color); margin-bottom: 10px; font-size: 1rem;}
         
         .guess-item {
             font-size: 1.1rem;
@@ -172,6 +180,15 @@
             color: white;
         }
 
+        /* Confetti Elements */
+        .confetti {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            z-index: 100;
+            pointer-events: none;
+        }
+
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes shake {
             0%, 100% { transform: translateX(0); }
@@ -189,12 +206,11 @@
 <body>
 
     <div class="container">
-        <!-- Player Identity -->
         <div id="identityBadge" class="identity-badge" style="display: none;"></div>
 
         <h1>Higher or Lower</h1>
+        <p class="subtitle">Online PvP Edition</p>
 
-        <!-- LOBBY SCREEN -->
         <div id="lobbyScreen">
             <div id="loadingText">Initializing Network...</div>
             
@@ -214,9 +230,27 @@
             </div>
         </div>
 
-        <!-- GAME SCREEN -->
+        <div id="setupScreen">
+            <div class="setup-panel">
+                <h3>Lock in your Secret Number!</h3>
+                <p style="margin: 10px 0 20px; color: var(--text-muted);">Choose a number between 1 and 1000 for your opponent to guess.</p>
+                <div class="input-section">
+                    <input type="number" id="secretInput" placeholder="000" min="1" max="1000">
+                    <button onclick="submitSecret()">Lock In</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="waitingScreen">
+            <div class="setup-panel">
+                <h3 style="color: var(--primary);">Number Locked In! 🔒</h3>
+                <p style="margin-top: 15px; color: var(--text-muted);">Waiting for your opponent to choose their number...</p>
+            </div>
+        </div>
+
         <div id="gameScreen">
             <div id="turnIndicator" class="turn-indicator turn-p1">Player 1's Turn</div>
+            <div id="targetHint" class="target-hint">Guessing Player 2's Number</div>
 
             <div class="input-section">
                 <input type="number" id="guessInput" placeholder="000" min="1" max="1000">
@@ -227,11 +261,11 @@
 
             <div class="history-container">
                 <div class="history-col p1-history">
-                    <h3>Player 1</h3>
+                    <h3>P1 Guesses</h3>
                     <div id="p1List"></div>
                 </div>
                 <div class="history-col p2-history">
-                    <h3>Player 2</h3>
+                    <h3>P2 Guesses</h3>
                     <div id="p2List"></div>
                 </div>
             </div>
@@ -245,9 +279,12 @@
         let isHost = false;
         let myPlayerNumber = 1;
 
-        // The Host holds the true state of the game
+        // Secret numbers kept on the Host
+        let p1Secret = null;
+        let p2Secret = null;
+
+        // The public game state broadcasted to both players
         let gameState = {
-            target: 0,
             turn: 1, // 1 or 2
             p1History: [],
             p2History: [],
@@ -258,14 +295,20 @@
 
         // --- DOM Elements ---
         const lobbyScreen = document.getElementById('lobbyScreen');
+        const setupScreen = document.getElementById('setupScreen');
+        const waitingScreen = document.getElementById('waitingScreen');
         const gameScreen = document.getElementById('gameScreen');
+        
         const hostPanel = document.getElementById('hostPanel');
         const guestPanel = document.getElementById('guestPanel');
         const loadingText = document.getElementById('loadingText');
         const inviteLinkInput = document.getElementById('inviteLink');
         const identityBadge = document.getElementById('identityBadge');
+        
         const turnIndicator = document.getElementById('turnIndicator');
+        const targetHint = document.getElementById('targetHint');
         const guessInput = document.getElementById('guessInput');
+        const secretInput = document.getElementById('secretInput');
         const submitBtn = document.getElementById('submitBtn');
         const feedback = document.getElementById('feedback');
         const p1List = document.getElementById('p1List');
@@ -276,26 +319,21 @@
             const urlParams = new URLSearchParams(window.location.search);
             const roomCode = urlParams.get('room');
 
-            peer = new Peer(); // Initialize PeerJS
+            peer = new Peer();
 
             peer.on('open', (id) => {
                 loadingText.style.display = 'none';
                 if (roomCode) {
-                    // We are Player 2 (Guest) joining a room
                     isHost = false;
                     myPlayerNumber = 2;
                     guestPanel.style.display = 'block';
                     setupGuest(roomCode);
                 } else {
-                    // We are Player 1 (Host) creating a room
                     isHost = true;
                     myPlayerNumber = 1;
                     hostPanel.style.display = 'block';
-                    
-                    // Create Shareable Link
                     const baseUrl = window.location.href.split('?')[0];
                     inviteLinkInput.value = `${baseUrl}?room=${id}`;
-                    
                     setupHost();
                 }
                 updateIdentityBadge();
@@ -304,22 +342,20 @@
 
         // --- Host Logic ---
         function setupHost() {
-            // Generate the secret number only on the Host
-            gameState.target = Math.floor(Math.random() * 1000) + 1;
-
             peer.on('connection', (conn) => {
                 connection = conn;
-                document.getElementById('waitingMsg').textContent = "Player 2 Joined! Starting Game...";
+                document.getElementById('waitingMsg').textContent = "Player 2 Joined! Moving to setup...";
                 
                 connection.on('open', () => {
-                    setTimeout(() => {
-                        startGameUI();
-                        broadcastState(); // Send initial state to P2
-                    }, 1000);
+                    setTimeout(() => { showSetupScreen(); }, 1500);
                 });
 
-                // Listen for guesses from Player 2
+                // Listen for data from Guest
                 connection.on('data', (data) => {
+                    if (data.type === 'SET_SECRET') {
+                        p2Secret = data.value;
+                        checkStartGame();
+                    }
                     if (data.type === 'GUESS') {
                         processGuess(data.value, 2);
                     }
@@ -332,23 +368,67 @@
             connection = peer.connect(hostId);
             
             connection.on('open', () => {
-                startGameUI();
+                showSetupScreen();
             });
 
-            // Listen for state updates from Host
+            // Listen for state updates and triggers from Host
             connection.on('data', (data) => {
+                if (data.type === 'START_GAME') {
+                    gameState = data.state;
+                    showGameScreen();
+                }
                 if (data.type === 'STATE_UPDATE') {
                     gameState = data.state;
                     updateUIFromState();
                 }
             });
 
-            connection.on('error', () => {
-                alert("Connection lost with Host.");
-            });
+            connection.on('error', () => { alert("Connection lost with Host."); });
         }
 
-        // --- Game Actions ---
+        // --- Phase 1: Setup Actions ---
+        function showSetupScreen() {
+            lobbyScreen.style.display = 'none';
+            setupScreen.style.display = 'block';
+        }
+
+        function submitSecret() {
+            const secret = parseInt(secretInput.value, 10);
+            if (isNaN(secret) || secret < 1 || secret > 1000) {
+                alert("Enter a valid number between 1 and 1000!");
+                return;
+            }
+
+            setupScreen.style.display = 'none';
+            waitingScreen.style.display = 'block';
+
+            if (isHost) {
+                p1Secret = secret;
+                checkStartGame();
+            } else {
+                connection.send({ type: 'SET_SECRET', value: secret });
+            }
+        }
+
+        // Host only: checks if both players have submitted secrets
+        function checkStartGame() {
+            if (p1Secret !== null && p2Secret !== null) {
+                // Both are ready, trigger game start
+                setTimeout(() => {
+                    showGameScreen();
+                    connection.send({ type: 'START_GAME', state: gameState });
+                }, 1000);
+            }
+        }
+
+        // --- Phase 2: Game Actions ---
+        function showGameScreen() {
+            waitingScreen.style.display = 'none';
+            setupScreen.style.display = 'none';
+            gameScreen.style.display = 'block';
+            updateUIFromState();
+        }
+
         function submitGuess() {
             const guess = parseInt(guessInput.value, 10);
             
@@ -357,29 +437,27 @@
                 return;
             }
 
-            // Only allow action if it's our turn
             if (gameState.turn !== myPlayerNumber || gameState.winner !== null) return;
 
             guessInput.value = '';
 
             if (isHost) {
-                // Host processes their own guess immediately
                 processGuess(guess, 1);
             } else {
-                // Guest sends guess to Host for processing
                 connection.send({ type: 'GUESS', value: guess });
             }
         }
 
-        // Host only: Process logic and update truth
-        function processGuess(guess, playerNumber) {
+        // Host only: Process logic comparing guess to opponent's secret
+        function processGuess(guess, guessingPlayer) {
+            let targetNumber = guessingPlayer === 1 ? p2Secret : p1Secret;
             let resultText = "";
             
-            if (guess === gameState.target) {
+            if (guess === targetNumber) {
                 resultText = `🎉 ${guess} is CORRECT!`;
-                gameState.winner = playerNumber;
+                gameState.winner = guessingPlayer;
                 gameState.feedbackColor = '#10b981';
-            } else if (guess > gameState.target) {
+            } else if (guess > targetNumber) {
                 resultText = `📉 ${guess} is Too High!`;
                 gameState.feedbackColor = '#ef4444';
             } else {
@@ -388,7 +466,7 @@
             }
 
             // Update Histories
-            if (playerNumber === 1) {
+            if (guessingPlayer === 1) {
                 gameState.p1History.unshift(resultText);
             } else {
                 gameState.p2History.unshift(resultText);
@@ -396,56 +474,49 @@
 
             // Switch Turns & Update Feedback
             if (gameState.winner === null) {
-                gameState.turn = playerNumber === 1 ? 2 : 1;
+                gameState.turn = guessingPlayer === 1 ? 2 : 1;
                 gameState.feedbackText = resultText;
             } else {
-                gameState.feedbackText = `🏆 Player ${playerNumber} Wins!`;
+                gameState.feedbackText = `🏆 Player ${guessingPlayer} Wins!`;
             }
 
-            // Update Host UI and send to Guest
             updateUIFromState();
             broadcastState();
         }
 
         function broadcastState() {
             if (connection && connection.open) {
-                // Remove the secret target before sending to prevent cheating via browser console
-                const safeState = { ...gameState, target: null };
-                connection.send({ type: 'STATE_UPDATE', state: safeState });
+                connection.send({ type: 'STATE_UPDATE', state: gameState });
             }
         }
 
         // --- UI Updates ---
-        function startGameUI() {
-            lobbyScreen.style.display = 'none';
-            gameScreen.style.display = 'block';
-            updateUIFromState();
-        }
-
         function updateUIFromState() {
-            // Update Turn Indicator
             if (gameState.winner) {
                 turnIndicator.textContent = `Game Over`;
                 turnIndicator.style.backgroundColor = '#10b981';
+                targetHint.textContent = `The secrets are revealed!`;
                 guessInput.disabled = true;
                 submitBtn.disabled = true;
+                
+                // Fire confetti if this client won
+                if (gameState.winner === myPlayerNumber) fireConfetti();
             } else {
                 turnIndicator.textContent = `Player ${gameState.turn}'s Turn`;
                 turnIndicator.className = gameState.turn === 1 ? 'turn-indicator turn-p1' : 'turn-indicator turn-p2';
                 
-                // Enable/Disable inputs based on network turn
+                // Update target hint based on whose turn it is
+                targetHint.textContent = gameState.turn === 1 ? "Guessing Player 2's Number" : "Guessing Player 1's Number";
+                
                 const isMyTurn = gameState.turn === myPlayerNumber;
                 guessInput.disabled = !isMyTurn;
                 submitBtn.disabled = !isMyTurn;
-                
                 if (isMyTurn) guessInput.focus();
             }
 
-            // Update Feedback
             feedback.textContent = gameState.feedbackText;
             feedback.style.color = gameState.feedbackColor;
 
-            // Trigger visual shake if wrong
             if (gameState.feedbackText.includes('Too')) {
                 const container = document.querySelector('.container');
                 container.classList.remove('shake');
@@ -453,7 +524,6 @@
                 container.classList.add('shake');
             }
 
-            // Render Lists
             p1List.innerHTML = gameState.p1History.map(g => `<div class="guess-item">${g}</div>`).join('');
             p2List.innerHTML = gameState.p2History.map(g => `<div class="guess-item">${g}</div>`).join('');
         }
@@ -476,10 +546,30 @@
             }, 2000);
         }
 
+        function fireConfetti() {
+            const colors = ['#38bdf8', '#fb7185', '#10b981', '#f59e0b', '#8b5cf6'];
+            for (let i = 0; i < 60; i++) {
+                const confetti = document.createElement('div');
+                confetti.classList.add('confetti');
+                confetti.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+                confetti.style.left = Math.random() * 100 + 'vw';
+                confetti.style.top = '-10px';
+                confetti.animate([
+                    { transform: `translate3d(0, 0, 0) rotate(0deg)`, opacity: 1 },
+                    { transform: `translate3d(${Math.random()*100 - 50}px, 100vh, 0) rotate(${Math.random()*720}deg)`, opacity: 0 }
+                ], {
+                    duration: Math.random() * 2000 + 1500,
+                    delay: Math.random() * 200,
+                    easing: 'cubic-bezier(.37,0,.63,1)',
+                    fill: 'forwards'
+                });
+                document.body.appendChild(confetti);
+            }
+        }
+
         // Allow pressing 'Enter' to submit
-        guessInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') submitBtn.click();
-        });
+        guessInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') submitBtn.click(); });
+        secretInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') submitSecret(); });
     </script>
 </body>
 </html>
