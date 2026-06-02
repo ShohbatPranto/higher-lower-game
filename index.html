@@ -211,7 +211,7 @@
         let p1Secret = null;
         let p2Secret = null;
 
-        // PURE DATA STATE (No emojis or formatted text allowed here!)
+        // PURE DATA STATE
         let state = {
             playersConnected: false,
             p1Ready: false,
@@ -219,9 +219,9 @@
             gameStarted: false,
             turn: 1,
             winner: null,
-            p1Guesses: [], // Contains objects like { value: 99, status: 'HIGH' }
+            p1Guesses: [],
             p2Guesses: [],
-            feedback: { type: 'START', player: 0, value: null } // type can be 'START', 'HIGH', 'LOW', 'WIN'
+            feedback: { type: 'START', player: 0, value: null } 
         };
 
         // --- Initialization ---
@@ -229,7 +229,21 @@
             const urlParams = new URLSearchParams(window.location.search);
             const roomCode = urlParams.get('room');
 
-            peer = new Peer();
+            // --- THE NETWORK FIX: EXPLICIT STUN SERVERS ---
+            // This forces the browsers to aggressively seek out public IP addresses
+            // to bypass Cell Tower NATs and Home Routers.
+            peer = new Peer({
+                config: {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { urls: 'stun:stun3.l.google.com:19302' },
+                        { urls: 'stun:stun4.l.google.com:19302' },
+                        { urls: 'stun:global.stun.twilio.com:3478' }
+                    ]
+                }
+            });
 
             peer.on('open', (id) => {
                 if (roomCode) {
@@ -262,7 +276,6 @@
                 });
                 conn.on('data', (rawData) => {
                     try {
-                        // Safe parsing for both objects and strings
                         const data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
                         if (data.type === 'INTENT') processIntent(data.intent, 2);
                     } catch(e) {
@@ -275,9 +288,12 @@
         // --- Guest Network Logic ---
         function setupGuest(hostId) {
             conn = peer.connect(hostId, { reliable: true });
+            conn.on('open', () => {
+                // Force an immediate render update when the connection officially opens
+                render();
+            });
             conn.on('data', (rawData) => {
                 try {
-                    // Safe parsing ensures emojis never crash the game again
                     const data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
                     if (data.type === 'SYNC') {
                         state = data.state;
@@ -315,7 +331,6 @@
                     status = 'LOW';
                 }
 
-                // Push pure data
                 const record = { value: guess, status: status };
                 if (playerCode === 1) state.p1Guesses.unshift(record);
                 else state.p2Guesses.unshift(record);
@@ -365,7 +380,7 @@
             }
         }
 
-        // --- UI Formatters (Keeps Emojis strictly in the UI layer) ---
+        // --- UI Formatters ---
         function formatGuessHTML(g) {
             if (g.status === 'WIN') return `<div class="guess-item" style="color: #10b981">🎉 ${g.value} is CORRECT!</div>`;
             if (g.status === 'HIGH') return `<div class="guess-item" style="color: #ef4444">📉 ${g.value} is Too High</div>`;
@@ -402,7 +417,6 @@
 
                 document.getElementById('targetHint').textContent = state.turn === 1 ? "Guessing Player 2's Number" : "Guessing Player 1's Number";
                 
-                // Render Feedback Safely
                 const fbEl = document.getElementById('feedback');
                 if (state.feedback.type === 'START') {
                     fbEl.textContent = 'Game Started! Player 1 goes first.';
@@ -418,7 +432,6 @@
                     fbEl.style.color = '#3b82f6';
                 }
 
-                // Render Lists Safely
                 document.getElementById('p1List').innerHTML = state.p1Guesses.map(formatGuessHTML).join('');
                 document.getElementById('p2List').innerHTML = state.p2Guesses.map(formatGuessHTML).join('');
 
