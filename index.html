@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Higher or Lower: PvP Showdown</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
+    <title>Higher or Lower: Online PvP</title>
+    
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-database-compat.js"></script>
+
     <style>
         :root {
             --primary: #6366f1;
@@ -124,7 +127,6 @@
         .guess-item { font-size: 1.1rem; margin-bottom: 5px; font-weight: 500; animation: fadeIn 0.3s ease-in forwards; }
         .confetti { position: absolute; width: 10px; height: 10px; z-index: 100; pointer-events: none; }
 
-        /* Mobile Adjustments */
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
         @media (max-width: 500px) { 
             .container { padding: 55px 15px 25px; } 
@@ -146,11 +148,11 @@
         </div>
 
         <h1>Higher or Lower</h1>
-        <p class="subtitle">Online PvP Edition</p>
+        <p class="subtitle">Firebase Powered Edition</p>
 
         <div id="lobbyScreen">
             <div id="hostPanel" class="lobby-panel" style="display: none;">
-                <h3>You are Player 1 (Host)</h3>
+                <h3>You are Player 1 (Creator)</h3>
                 <p style="margin-top: 10px; color: #64748b;">Send this link to your opponent:</p>
                 <div class="link-box">
                     <input type="text" id="inviteLink" readonly>
@@ -160,7 +162,7 @@
             </div>
             <div id="guestPanel" class="lobby-panel" style="display: none;">
                 <h3>You are Player 2</h3>
-                <p style="margin-top: 10px; color: var(--p2-color);">Connecting to Host...</p>
+                <p style="margin-top: 10px; color: var(--p2-color);">Connecting to Room...</p>
             </div>
         </div>
 
@@ -207,24 +209,24 @@
     </div>
 
     <script>
-        // --- In-App Browser Detection ---
-        function checkBrowser() {
-            const ua = navigator.userAgent || navigator.vendor || window.opera;
-            if ((ua.indexOf("FBAN") > -1) || (ua.indexOf("FBAV") > -1) || (ua.indexOf("Instagram") > -1)) {
-                alert("⚠️ WARNING: You are using an in-app browser (like Messenger). The game network will NOT work here.\n\nPlease tap the 3 dots in the corner and select 'Open in Chrome' or 'Open in Safari'.");
-            }
-        }
+        // --- 1. FIREBASE INITIALIZATION ---
+        const firebaseConfig = {
+            apiKey: "AIzaSyBGE0l0kI7Jbj1eF69UUrinyDQ92Pd5TjE",
+            authDomain: "higher-lower-1b5f3.firebaseapp.com",
+            databaseURL: "https://higher-lower-1b5f3-default-rtdb.firebaseio.com",
+            projectId: "higher-lower-1b5f3",
+            storageBucket: "higher-lower-1b5f3.firebasestorage.app",
+            messagingSenderId: "232342844095",
+            appId: "1:232342844095:web:a41f1c2a96c99aa8e00c0a"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
 
-        // --- Core Engine Variables ---
-        let peer = null;
-        let conn = null;
-        let isHost = false;
-        let me = 1;
+        // --- Core Variables ---
+        let me = 1; 
+        let roomRef = null;
         let confettiFired = false;
-
-        let p1Secret = null;
-        let p2Secret = null;
-
+        
         let state = {
             playersConnected: false,
             p1Ready: false,
@@ -237,129 +239,57 @@
             feedback: { type: 'START', player: 0, value: null } 
         };
 
-        // --- Initialization ---
+        // --- 2. ROOM SETUP & SYNC ---
         window.onload = () => {
-            checkBrowser(); // Check for restricted browsers immediately
-
             const urlParams = new URLSearchParams(window.location.search);
             const roomCode = urlParams.get('room');
 
-            // --- THE NETWORK FIX: TURN SERVERS FOR CELLULAR/4G ---
-            peer = new Peer({
-                config: {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' },
-                        // TURN relay servers for passing through strict firewalls
-                        {
-                            urls: "turn:openrelay.metered.ca:80",
-                            username: "openrelayproject",
-                            credential: "openrelayproject"
-                        },
-                        {
-                            urls: "turn:openrelay.metered.ca:443",
-                            username: "openrelayproject",
-                            credential: "openrelayproject"
-                        }
-                    ]
-                }
+            if (roomCode) {
+                me = 2; // Guest
+                document.getElementById('guestPanel').style.display = 'block';
+                roomRef = db.ref('rooms/' + roomCode);
+                roomRef.update({ playersConnected: true }); 
+            } else {
+                me = 1; // Host creates new room ID
+                const newRoomId = Math.random().toString(36).substring(2, 8);
+                const baseUrl = window.location.href.split('?')[0];
+                document.getElementById('inviteLink').value = `${baseUrl}?room=${newRoomId}`;
+                document.getElementById('hostPanel').style.display = 'block';
+                
+                roomRef = db.ref('rooms/' + newRoomId);
+                // Initialize fresh empty room in Firebase
+                roomRef.set({
+                    playersConnected: false, p1Ready: false, p2Ready: false, gameStarted: false,
+                    turn: 1, winner: null, p1Secret: 0, p2Secret: 0,
+                    feedback: { type: 'START', player: 0, value: null }
+                });
+            }
+
+            const badge = document.getElementById('identityBadge');
+            badge.style.display = 'block';
+            badge.textContent = me === 1 ? "You: Player 1" : "You: Player 2";
+            badge.style.backgroundColor = me === 1 ? "var(--p1-color)" : "var(--p2-color)";
+
+            // Monitor Firebase connection status
+            db.ref('.info/connected').on('value', (snap) => {
+                const isConnected = snap.val() === true;
+                document.getElementById('statusDot').className = isConnected ? "status-dot status-connected" : "status-dot status-disconnected";
+                document.getElementById('statusText').textContent = isConnected ? "Server Connected" : "Connecting to Server...";
             });
 
-            peer.on('open', (id) => {
-                if (roomCode) {
-                    isHost = false; me = 2;
-                    setupGuest(roomCode);
-                } else {
-                    isHost = true; me = 1;
-                    const baseUrl = window.location.href.split('?')[0];
-                    document.getElementById('inviteLink').value = `${baseUrl}?room=${id}`;
-                    setupHost();
+            // Listen for any changes to the room and update local state!
+            roomRef.on('value', (snapshot) => {
+                if (snapshot.exists()) {
+                    state = snapshot.val();
+                    // Ensure arrays don't become undefined if empty
+                    state.p1Guesses = state.p1Guesses || [];
+                    state.p2Guesses = state.p2Guesses || [];
+                    render();
                 }
-                
-                const badge = document.getElementById('identityBadge');
-                badge.style.display = 'block';
-                badge.textContent = isHost ? "You: Player 1" : "You: Player 2";
-                badge.style.backgroundColor = isHost ? "var(--p1-color)" : "var(--p2-color)";
-                
-                render();
             });
         };
 
-        // --- Host Network Logic ---
-        function setupHost() {
-            peer.on('connection', (c) => {
-                conn = c;
-                conn.on('open', () => {
-                    state.playersConnected = true;
-                    syncStateToGuest();
-                    render();
-                });
-                conn.on('data', (rawData) => {
-                    try {
-                        const data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
-                        if (data.type === 'INTENT') processIntent(data.intent, 2);
-                    } catch(e) { console.error("Host Data Error:", e); }
-                });
-            });
-        }
-
-        // --- Guest Network Logic ---
-        function setupGuest(hostId) {
-            conn = peer.connect(hostId, { reliable: true });
-            conn.on('open', () => {
-                render(); // Update UI immediately when connection opens
-            });
-            conn.on('data', (rawData) => {
-                try {
-                    const data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
-                    if (data.type === 'SYNC') {
-                        state = data.state;
-                        render();
-                    }
-                } catch(e) { console.error("Guest Data Error:", e); }
-            });
-        }
-
-        // --- Game Engine (Host Only) ---
-        function processIntent(intent, playerCode) {
-            if (intent.type === 'SET_SECRET') {
-                if (playerCode === 1) { p1Secret = intent.value; state.p1Ready = true; }
-                if (playerCode === 2) { p2Secret = intent.value; state.p2Ready = true; }
-                
-                if (state.p1Ready && state.p2Ready) {
-                    state.gameStarted = true;
-                    state.feedback = { type: 'START', player: 0, value: null };
-                }
-            }
-
-            if (intent.type === 'GUESS') {
-                const guess = intent.value;
-                const target = playerCode === 1 ? p2Secret : p1Secret;
-                
-                let status = '';
-                if (guess === target) { status = 'WIN'; state.winner = playerCode; } 
-                else if (guess > target) { status = 'HIGH'; } 
-                else { status = 'LOW'; }
-
-                const record = { value: guess, status: status };
-                if (playerCode === 1) state.p1Guesses.unshift(record);
-                else state.p2Guesses.unshift(record);
-
-                state.feedback = { player: playerCode, type: status, value: guess };
-                if (!state.winner) state.turn = playerCode === 1 ? 2 : 1;
-            }
-
-            syncStateToGuest();
-            render();
-        }
-
-        function syncStateToGuest() {
-            if (isHost && conn && conn.open) {
-                conn.send(JSON.stringify({ type: 'SYNC', state: state }));
-            }
-        }
-
-        // --- User Actions ---
+        // --- 3. GAME ACTIONS (Writing to Firebase) ---
         function submitSecret() {
             const val = parseInt(document.getElementById('secretInput').value, 10);
             if (isNaN(val) || val < 1 || val > 1000) return;
@@ -367,8 +297,17 @@
             document.getElementById('secretBtn').disabled = true;
             document.getElementById('secretBtn').textContent = "Locked";
 
-            if (isHost) processIntent({ type: 'SET_SECRET', value: val }, 1);
-            else conn.send(JSON.stringify({ type: 'INTENT', intent: { type: 'SET_SECRET', value: val } }));
+            const updates = {};
+            if (me === 1) {
+                updates.p1Secret = val;
+                updates.p1Ready = true;
+                if (state.p2Ready) updates.gameStarted = true;
+            } else {
+                updates.p2Secret = val;
+                updates.p2Ready = true;
+                if (state.p1Ready) updates.gameStarted = true;
+            }
+            roomRef.update(updates);
         }
 
         function submitGuess() {
@@ -379,8 +318,29 @@
             document.getElementById('submitBtn').disabled = true;
             document.getElementById('submitBtn').textContent = 'Sending...';
 
-            if (isHost) processIntent({ type: 'GUESS', value: val }, 1);
-            else conn.send(JSON.stringify({ type: 'INTENT', intent: { type: 'GUESS', value: val } }));
+            const target = me === 1 ? state.p2Secret : state.p1Secret;
+            let status = '';
+            if (val === target) status = 'WIN';
+            else if (val > target) status = 'HIGH';
+            else status = 'LOW';
+
+            const record = { value: val, status: status };
+            const updates = {};
+
+            // Add the new guess to the start of the array
+            if (me === 1) {
+                updates.p1Guesses = [record, ...state.p1Guesses];
+            } else {
+                updates.p2Guesses = [record, ...state.p2Guesses];
+            }
+
+            updates.feedback = { player: me, type: status, value: val };
+            
+            if (status === 'WIN') updates.winner = me;
+            else updates.turn = me === 1 ? 2 : 1;
+
+            // Push calculation to server
+            roomRef.update(updates);
         }
 
         // --- UI Formatters ---
@@ -391,19 +351,13 @@
             return '';
         }
 
-        // --- Render Engine ---
+        // --- 4. RENDER ENGINE (Reading from Firebase) ---
         function render() {
-            const isConn = isHost ? state.playersConnected : (conn && conn.open);
-            document.getElementById('statusDot').className = isConn ? "status-dot status-connected" : "status-dot status-disconnected";
-            document.getElementById('statusText').textContent = isConn ? (isHost ? "P2 Connected" : "Connected") : "Waiting/Disconnected";
-
             const screens = ['lobbyScreen', 'setupScreen', 'waitingScreen', 'gameScreen'];
             screens.forEach(s => document.getElementById(s).style.display = 'none');
 
-            if (!state.playersConnected) {
+            if (!state.playersConnected && me === 1) {
                 document.getElementById('lobbyScreen').style.display = 'block';
-                document.getElementById('hostPanel').style.display = isHost ? 'block' : 'none';
-                document.getElementById('guestPanel').style.display = !isHost ? 'block' : 'none';
             } else if (!state.gameStarted) {
                 const amIReady = me === 1 ? state.p1Ready : state.p2Ready;
                 if (amIReady) document.getElementById('waitingScreen').style.display = 'block';
@@ -416,7 +370,7 @@
                 const tInd = document.getElementById('turnIndicator');
                 tInd.textContent = state.winner ? 'Game Over' : `Player ${state.turn}'s Turn`;
                 tInd.className = state.winner ? 'turn-indicator' : `turn-indicator turn-p${state.turn}`;
-                if(state.winner) tInd.style.backgroundColor = '#10b981';
+                if (state.winner) tInd.style.backgroundColor = '#10b981';
 
                 document.getElementById('targetHint').textContent = state.turn === 1 ? "Guessing Player 2's Number" : "Guessing Player 1's Number";
                 
@@ -458,7 +412,8 @@
         }
 
         function copyLink() {
-            document.getElementById('inviteLink').select();
+            const linkInput = document.getElementById('inviteLink');
+            linkInput.select();
             document.execCommand("copy");
             const btn = document.getElementById('copyBtn');
             btn.textContent = 'Copied!'; btn.style.backgroundColor = '#10b981';
@@ -482,8 +437,6 @@
 
         document.getElementById('guessInput').addEventListener('keypress', (e) => { if (e.key === 'Enter' && !document.getElementById('submitBtn').disabled) submitGuess(); });
         document.getElementById('secretInput').addEventListener('keypress', (e) => { if (e.key === 'Enter' && !document.getElementById('secretBtn').disabled) submitSecret(); });
-
-        setInterval(render, 2000); 
     </script>
 </body>
 </html>
