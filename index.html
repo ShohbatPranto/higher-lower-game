@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Higher or Lower: Online Showdown</title>
+    <!-- PeerJS for Serverless Online Multiplayer -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --p1-color: #38bdf8;
+            --p2-color: #fb7185;
+            --bg-gradient: linear-gradient(135deg, #f0f9ff 0%, #e0e7ff 100%);
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background: var(--bg-gradient);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: var(--card-bg);
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.08);
+            width: 100%;
+            max-width: 600px;
+            padding: 40px 30px;
+            text-align: center;
+            position: relative;
+        }
+
+        h1 { font-size: 2.2rem; margin-bottom: 5px; font-weight: 800; }
+        .subtitle { color: var(--text-muted); margin-bottom: 20px; font-size: 0.95rem; }
+
+        /* Screens */
+        #gameScreen { display: none; }
+        
+        .lobby-panel {
+            background: #f8fafc;
+            border: 2px dashed #cbd5e1;
+            border-radius: 16px;
+            padding: 30px;
+            margin-top: 20px;
+        }
+
+        .link-box {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            background: #f1f5f9;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            color: white;
+            background-color: var(--primary);
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3);
+        }
+
+        button:hover { background-color: var(--primary-hover); transform: translateY(-2px); }
+        button:disabled { background-color: #cbd5e1; cursor: not-allowed; transform: none; box-shadow: none;}
+
+        .turn-indicator {
+            display: inline-block;
+            padding: 8px 24px;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 1.2rem;
+            margin-bottom: 25px;
+            color: white;
+            transition: background-color 0.3s;
+        }
+
+        .turn-p1 { background-color: var(--p1-color); }
+        .turn-p2 { background-color: var(--p2-color); }
+
+        .input-section {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input[type="number"] {
+            width: 120px;
+            padding: 15px;
+            font-size: 1.5rem;
+            border: 2px solid #cbd5e1;
+            border-radius: 12px;
+            text-align: center;
+            outline: none;
+        }
+        
+        input[type="number"]:focus { border-color: var(--primary); }
+        input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+        .feedback {
+            font-size: 1.4rem;
+            font-weight: 700;
+            min-height: 40px;
+            margin-bottom: 20px;
+        }
+
+        .history-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+            border-top: 2px solid #e2e8f0;
+            padding-top: 20px;
+        }
+
+        .history-col {
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 15px;
+            height: 180px;
+            overflow-y: auto;
+        }
+
+        .p1-history h3 { color: var(--p1-color); margin-bottom: 10px; }
+        .p2-history h3 { color: var(--p2-color); margin-bottom: 10px; }
+        
+        .guess-item {
+            font-size: 1.1rem;
+            margin-bottom: 5px;
+            font-weight: 500;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        .identity-badge {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            padding: 4px 10px;
+            border-radius: 20px;
+            color: white;
+        }
+
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        .shake { animation: shake 0.3s both; }
+
+        @media (max-width: 500px) {
+            .container { padding: 25px 15px; }
+            .history-container { gap: 10px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- Player Identity -->
+        <div id="identityBadge" class="identity-badge" style="display: none;"></div>
+
+        <h1>Higher or Lower</h1>
+
+        <!-- LOBBY SCREEN -->
+        <div id="lobbyScreen">
+            <div id="loadingText">Initializing Network...</div>
+            
+            <div id="hostPanel" class="lobby-panel" style="display: none;">
+                <h3>You are Player 1 (Host)</h3>
+                <p style="margin-top: 10px; color: #64748b;">Send this link to your opponent:</p>
+                <div class="link-box">
+                    <input type="text" id="inviteLink" readonly>
+                    <button onclick="copyLink()" id="copyBtn">Copy</button>
+                </div>
+                <p id="waitingMsg" style="margin-top: 15px; font-weight: bold; color: var(--p1-color);">Waiting for Player 2 to join...</p>
+            </div>
+
+            <div id="guestPanel" class="lobby-panel" style="display: none;">
+                <h3>You are Player 2</h3>
+                <p style="margin-top: 10px; color: var(--p2-color);">Connecting to Player 1...</p>
+            </div>
+        </div>
+
+        <!-- GAME SCREEN -->
+        <div id="gameScreen">
+            <div id="turnIndicator" class="turn-indicator turn-p1">Player 1's Turn</div>
+
+            <div class="input-section">
+                <input type="number" id="guessInput" placeholder="000" min="1" max="1000">
+                <button id="submitBtn" onclick="submitGuess()">Guess</button>
+            </div>
+
+            <div id="feedback" class="feedback">Game Started! Player 1 goes first.</div>
+
+            <div class="history-container">
+                <div class="history-col p1-history">
+                    <h3>Player 1</h3>
+                    <div id="p1List"></div>
+                </div>
+                <div class="history-col p2-history">
+                    <h3>Player 2</h3>
+                    <div id="p2List"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Network & State Variables ---
+        let peer = null;
+        let connection = null;
+        let isHost = false;
+        let myPlayerNumber = 1;
+
+        // The Host holds the true state of the game
+        let gameState = {
+            target: 0,
+            turn: 1, // 1 or 2
+            p1History: [],
+            p2History: [],
+            feedbackText: 'Game Started! Player 1 goes first.',
+            feedbackColor: '#1e293b',
+            winner: null
+        };
+
+        // --- DOM Elements ---
+        const lobbyScreen = document.getElementById('lobbyScreen');
+        const gameScreen = document.getElementById('gameScreen');
+        const hostPanel = document.getElementById('hostPanel');
+        const guestPanel = document.getElementById('guestPanel');
+        const loadingText = document.getElementById('loadingText');
+        const inviteLinkInput = document.getElementById('inviteLink');
+        const identityBadge = document.getElementById('identityBadge');
+        const turnIndicator = document.getElementById('turnIndicator');
+        const guessInput = document.getElementById('guessInput');
+        const submitBtn = document.getElementById('submitBtn');
+        const feedback = document.getElementById('feedback');
+        const p1List = document.getElementById('p1List');
+        const p2List = document.getElementById('p2List');
+
+        // --- Initialization ---
+        window.onload = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const roomCode = urlParams.get('room');
+
+            peer = new Peer(); // Initialize PeerJS
+
+            peer.on('open', (id) => {
+                loadingText.style.display = 'none';
+                if (roomCode) {
+                    // We are Player 2 (Guest) joining a room
+                    isHost = false;
+                    myPlayerNumber = 2;
+                    guestPanel.style.display = 'block';
+                    setupGuest(roomCode);
+                } else {
+                    // We are Player 1 (Host) creating a room
+                    isHost = true;
+                    myPlayerNumber = 1;
+                    hostPanel.style.display = 'block';
+                    
+                    // Create Shareable Link
+                    const baseUrl = window.location.href.split('?')[0];
+                    inviteLinkInput.value = `${baseUrl}?room=${id}`;
+                    
+                    setupHost();
+                }
+                updateIdentityBadge();
+            });
+        };
+
+        // --- Host Logic ---
+        function setupHost() {
+            // Generate the secret number only on the Host
+            gameState.target = Math.floor(Math.random() * 1000) + 1;
+
+            peer.on('connection', (conn) => {
+                connection = conn;
+                document.getElementById('waitingMsg').textContent = "Player 2 Joined! Starting Game...";
+                
+                connection.on('open', () => {
+                    setTimeout(() => {
+                        startGameUI();
+                        broadcastState(); // Send initial state to P2
+                    }, 1000);
+                });
+
+                // Listen for guesses from Player 2
+                connection.on('data', (data) => {
+                    if (data.type === 'GUESS') {
+                        processGuess(data.value, 2);
+                    }
+                });
+            });
+        }
+
+        // --- Guest Logic ---
+        function setupGuest(hostId) {
+            connection = peer.connect(hostId);
+            
+            connection.on('open', () => {
+                startGameUI();
+            });
+
+            // Listen for state updates from Host
+            connection.on('data', (data) => {
+                if (data.type === 'STATE_UPDATE') {
+                    gameState = data.state;
+                    updateUIFromState();
+                }
+            });
+
+            connection.on('error', () => {
+                alert("Connection lost with Host.");
+            });
+        }
+
+        // --- Game Actions ---
+        function submitGuess() {
+            const guess = parseInt(guessInput.value, 10);
+            
+            if (isNaN(guess) || guess < 1 || guess > 1000) {
+                alert("Enter a number between 1 and 1000!");
+                return;
+            }
+
+            // Only allow action if it's our turn
+            if (gameState.turn !== myPlayerNumber || gameState.winner !== null) return;
+
+            guessInput.value = '';
+
+            if (isHost) {
+                // Host processes their own guess immediately
+                processGuess(guess, 1);
+            } else {
+                // Guest sends guess to Host for processing
+                connection.send({ type: 'GUESS', value: guess });
+            }
+        }
+
+        // Host only: Process logic and update truth
+        function processGuess(guess, playerNumber) {
+            let resultText = "";
+            
+            if (guess === gameState.target) {
+                resultText = `🎉 ${guess} is CORRECT!`;
+                gameState.winner = playerNumber;
+                gameState.feedbackColor = '#10b981';
+            } else if (guess > gameState.target) {
+                resultText = `📉 ${guess} is Too High!`;
+                gameState.feedbackColor = '#ef4444';
+            } else {
+                resultText = `📈 ${guess} is Too Low!`;
+                gameState.feedbackColor = '#3b82f6';
+            }
+
+            // Update Histories
+            if (playerNumber === 1) {
+                gameState.p1History.unshift(resultText);
+            } else {
+                gameState.p2History.unshift(resultText);
+            }
+
+            // Switch Turns & Update Feedback
+            if (gameState.winner === null) {
+                gameState.turn = playerNumber === 1 ? 2 : 1;
+                gameState.feedbackText = resultText;
+            } else {
+                gameState.feedbackText = `🏆 Player ${playerNumber} Wins!`;
+            }
+
+            // Update Host UI and send to Guest
+            updateUIFromState();
+            broadcastState();
+        }
+
+        function broadcastState() {
+            if (connection && connection.open) {
+                // Remove the secret target before sending to prevent cheating via browser console
+                const safeState = { ...gameState, target: null };
+                connection.send({ type: 'STATE_UPDATE', state: safeState });
+            }
+        }
+
+        // --- UI Updates ---
+        function startGameUI() {
+            lobbyScreen.style.display = 'none';
+            gameScreen.style.display = 'block';
+            updateUIFromState();
+        }
+
+        function updateUIFromState() {
+            // Update Turn Indicator
+            if (gameState.winner) {
+                turnIndicator.textContent = `Game Over`;
+                turnIndicator.style.backgroundColor = '#10b981';
+                guessInput.disabled = true;
+                submitBtn.disabled = true;
+            } else {
+                turnIndicator.textContent = `Player ${gameState.turn}'s Turn`;
+                turnIndicator.className = gameState.turn === 1 ? 'turn-indicator turn-p1' : 'turn-indicator turn-p2';
+                
+                // Enable/Disable inputs based on network turn
+                const isMyTurn = gameState.turn === myPlayerNumber;
+                guessInput.disabled = !isMyTurn;
+                submitBtn.disabled = !isMyTurn;
+                
+                if (isMyTurn) guessInput.focus();
+            }
+
+            // Update Feedback
+            feedback.textContent = gameState.feedbackText;
+            feedback.style.color = gameState.feedbackColor;
+
+            // Trigger visual shake if wrong
+            if (gameState.feedbackText.includes('Too')) {
+                const container = document.querySelector('.container');
+                container.classList.remove('shake');
+                void container.offsetWidth;
+                container.classList.add('shake');
+            }
+
+            // Render Lists
+            p1List.innerHTML = gameState.p1History.map(g => `<div class="guess-item">${g}</div>`).join('');
+            p2List.innerHTML = gameState.p2History.map(g => `<div class="guess-item">${g}</div>`).join('');
+        }
+
+        function updateIdentityBadge() {
+            identityBadge.style.display = 'block';
+            identityBadge.textContent = isHost ? "You: Player 1" : "You: Player 2";
+            identityBadge.style.backgroundColor = isHost ? "var(--p1-color)" : "var(--p2-color)";
+        }
+
+        function copyLink() {
+            inviteLinkInput.select();
+            document.execCommand("copy");
+            const btn = document.getElementById('copyBtn');
+            btn.textContent = 'Copied!';
+            btn.style.backgroundColor = '#10b981';
+            setTimeout(() => {
+                btn.textContent = 'Copy';
+                btn.style.backgroundColor = 'var(--primary)';
+            }, 2000);
+        }
+
+        // Allow pressing 'Enter' to submit
+        guessInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') submitBtn.click();
+        });
+    </script>
+</body>
+</html>
