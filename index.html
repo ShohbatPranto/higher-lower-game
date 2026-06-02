@@ -124,8 +124,14 @@
         .guess-item { font-size: 1.1rem; margin-bottom: 5px; font-weight: 500; animation: fadeIn 0.3s ease-in forwards; }
         .confetti { position: absolute; width: 10px; height: 10px; z-index: 100; pointer-events: none; }
 
+        /* Mobile Adjustments */
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        @media (max-width: 500px) { .container { padding: 45px 15px 25px; } .history-container { gap: 10px; } }
+        @media (max-width: 500px) { 
+            .container { padding: 55px 15px 25px; } 
+            .history-container { gap: 10px; } 
+            .top-badges { flex-direction: column; gap: 10px; align-items: center;}
+            .identity-badge { position: static; }
+        }
     </style>
 </head>
 <body>
@@ -201,6 +207,14 @@
     </div>
 
     <script>
+        // --- In-App Browser Detection ---
+        function checkBrowser() {
+            const ua = navigator.userAgent || navigator.vendor || window.opera;
+            if ((ua.indexOf("FBAN") > -1) || (ua.indexOf("FBAV") > -1) || (ua.indexOf("Instagram") > -1)) {
+                alert("⚠️ WARNING: You are using an in-app browser (like Messenger). The game network will NOT work here.\n\nPlease tap the 3 dots in the corner and select 'Open in Chrome' or 'Open in Safari'.");
+            }
+        }
+
         // --- Core Engine Variables ---
         let peer = null;
         let conn = null;
@@ -211,7 +225,6 @@
         let p1Secret = null;
         let p2Secret = null;
 
-        // PURE DATA STATE
         let state = {
             playersConnected: false,
             p1Ready: false,
@@ -226,21 +239,28 @@
 
         // --- Initialization ---
         window.onload = () => {
+            checkBrowser(); // Check for restricted browsers immediately
+
             const urlParams = new URLSearchParams(window.location.search);
             const roomCode = urlParams.get('room');
 
-            // --- THE NETWORK FIX: EXPLICIT STUN SERVERS ---
-            // This forces the browsers to aggressively seek out public IP addresses
-            // to bypass Cell Tower NATs and Home Routers.
+            // --- THE NETWORK FIX: TURN SERVERS FOR CELLULAR/4G ---
             peer = new Peer({
                 config: {
                     iceServers: [
                         { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' }
+                        { urls: 'stun:global.stun.twilio.com:3478' },
+                        // TURN relay servers for passing through strict firewalls
+                        {
+                            urls: "turn:openrelay.metered.ca:80",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        },
+                        {
+                            urls: "turn:openrelay.metered.ca:443",
+                            username: "openrelayproject",
+                            credential: "openrelayproject"
+                        }
                     ]
                 }
             });
@@ -278,9 +298,7 @@
                     try {
                         const data = typeof rawData === 'string' ? JSON.parse(rawData) : rawData;
                         if (data.type === 'INTENT') processIntent(data.intent, 2);
-                    } catch(e) {
-                        console.error("Host Data Parse Error:", e);
-                    }
+                    } catch(e) { console.error("Host Data Error:", e); }
                 });
             });
         }
@@ -289,8 +307,7 @@
         function setupGuest(hostId) {
             conn = peer.connect(hostId, { reliable: true });
             conn.on('open', () => {
-                // Force an immediate render update when the connection officially opens
-                render();
+                render(); // Update UI immediately when connection opens
             });
             conn.on('data', (rawData) => {
                 try {
@@ -299,9 +316,7 @@
                         state = data.state;
                         render();
                     }
-                } catch(e) {
-                    console.error("Guest Data Parse Error:", e);
-                }
+                } catch(e) { console.error("Guest Data Error:", e); }
             });
         }
 
@@ -322,21 +337,15 @@
                 const target = playerCode === 1 ? p2Secret : p1Secret;
                 
                 let status = '';
-                if (guess === target) {
-                    status = 'WIN';
-                    state.winner = playerCode;
-                } else if (guess > target) {
-                    status = 'HIGH';
-                } else {
-                    status = 'LOW';
-                }
+                if (guess === target) { status = 'WIN'; state.winner = playerCode; } 
+                else if (guess > target) { status = 'HIGH'; } 
+                else { status = 'LOW'; }
 
                 const record = { value: guess, status: status };
                 if (playerCode === 1) state.p1Guesses.unshift(record);
                 else state.p2Guesses.unshift(record);
 
                 state.feedback = { player: playerCode, type: status, value: guess };
-
                 if (!state.winner) state.turn = playerCode === 1 ? 2 : 1;
             }
 
@@ -358,11 +367,8 @@
             document.getElementById('secretBtn').disabled = true;
             document.getElementById('secretBtn').textContent = "Locked";
 
-            if (isHost) {
-                processIntent({ type: 'SET_SECRET', value: val }, 1);
-            } else {
-                conn.send(JSON.stringify({ type: 'INTENT', intent: { type: 'SET_SECRET', value: val } }));
-            }
+            if (isHost) processIntent({ type: 'SET_SECRET', value: val }, 1);
+            else conn.send(JSON.stringify({ type: 'INTENT', intent: { type: 'SET_SECRET', value: val } }));
         }
 
         function submitGuess() {
@@ -373,11 +379,8 @@
             document.getElementById('submitBtn').disabled = true;
             document.getElementById('submitBtn').textContent = 'Sending...';
 
-            if (isHost) {
-                processIntent({ type: 'GUESS', value: val }, 1);
-            } else {
-                conn.send(JSON.stringify({ type: 'INTENT', intent: { type: 'GUESS', value: val } }));
-            }
+            if (isHost) processIntent({ type: 'GUESS', value: val }, 1);
+            else conn.send(JSON.stringify({ type: 'INTENT', intent: { type: 'GUESS', value: val } }));
         }
 
         // --- UI Formatters ---
