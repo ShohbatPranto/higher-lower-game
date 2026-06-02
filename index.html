@@ -114,6 +114,27 @@
 
         .feedback { font-size: 1.4rem; font-weight: 700; min-height: 40px; margin-bottom: 20px; }
 
+        /* New Game Over Panel Styles */
+        .game-over-section {
+            background: #f1f5f9;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            display: none;
+            animation: fadeIn 0.4s ease-out;
+        }
+        
+        .secrets-reveal {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+        
+        .p1-secret-text { color: var(--p1-color); }
+        .p2-secret-text { color: var(--p2-color); }
+
         .history-container {
             display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;
             border-top: 2px solid #e2e8f0; padding-top: 20px;
@@ -133,6 +154,7 @@
             .history-container { gap: 10px; } 
             .top-badges { flex-direction: column; gap: 10px; align-items: center;}
             .identity-badge { position: static; }
+            .secrets-reveal { flex-direction: column; gap: 10px; }
         }
     </style>
 </head>
@@ -148,6 +170,7 @@
         </div>
 
         <h1>Higher or Lower</h1>
+        <p class="subtitle">Firebase Powered Edition</p>
 
         <div id="lobbyScreen">
             <div id="hostPanel" class="lobby-panel" style="display: none;">
@@ -187,9 +210,17 @@
             <div id="turnIndicator" class="turn-indicator turn-p1">Player 1's Turn</div>
             <div id="targetHint" class="target-hint">Guessing Player 2's Number</div>
 
-            <div class="input-section">
+            <div class="input-section" id="activePlaySection">
                 <input type="number" id="guessInput" placeholder="000" min="1" max="1000" autocomplete="off">
                 <button id="submitBtn" onclick="submitGuess()">Guess</button>
+            </div>
+
+            <div class="game-over-section" id="gameOverSection">
+                <div class="secrets-reveal">
+                    <span class="p1-secret-text">Player 1's Secret: <span id="p1RevealText">0</span></span>
+                    <span class="p2-secret-text">Player 2's Secret: <span id="p2RevealText">0</span></span>
+                </div>
+                <button id="rematchBtn" onclick="requestRematch()">Play Again</button>
             </div>
 
             <div id="feedback" class="feedback">Game Started! Player 1 goes first.</div>
@@ -233,8 +264,12 @@
             gameStarted: false,
             turn: 1,
             winner: null,
+            p1Secret: 0,
+            p2Secret: 0,
             p1Guesses: [],
             p2Guesses: [],
+            p1Rematch: false,
+            p2Rematch: false,
             feedback: { type: 'START', player: 0, value: null } 
         };
 
@@ -260,6 +295,7 @@
                 roomRef.set({
                     playersConnected: false, p1Ready: false, p2Ready: false, gameStarted: false,
                     turn: 1, winner: null, p1Secret: 0, p2Secret: 0,
+                    p1Rematch: false, p2Rematch: false,
                     feedback: { type: 'START', player: 0, value: null }
                 });
             }
@@ -269,20 +305,21 @@
             badge.textContent = me === 1 ? "You: Player 1" : "You: Player 2";
             badge.style.backgroundColor = me === 1 ? "var(--p1-color)" : "var(--p2-color)";
 
-            // Monitor Firebase connection status
             db.ref('.info/connected').on('value', (snap) => {
                 const isConnected = snap.val() === true;
                 document.getElementById('statusDot').className = isConnected ? "status-dot status-connected" : "status-dot status-disconnected";
                 document.getElementById('statusText').textContent = isConnected ? "Server Connected" : "Connecting to Server...";
             });
 
-            // Listen for any changes to the room and update local state!
             roomRef.on('value', (snapshot) => {
                 if (snapshot.exists()) {
                     state = snapshot.val();
-                    // Ensure arrays don't become undefined if empty
                     state.p1Guesses = state.p1Guesses || [];
                     state.p2Guesses = state.p2Guesses || [];
+                    
+                    // Reset local confetti tracker if a new game has started
+                    if (!state.winner) confettiFired = false; 
+                    
                     render();
                 }
             });
@@ -326,19 +363,48 @@
             const record = { value: val, status: status };
             const updates = {};
 
-            // Add the new guess to the start of the array
-            if (me === 1) {
-                updates.p1Guesses = [record, ...state.p1Guesses];
-            } else {
-                updates.p2Guesses = [record, ...state.p2Guesses];
-            }
+            if (me === 1) updates.p1Guesses = [record, ...state.p1Guesses];
+            else updates.p2Guesses = [record, ...state.p2Guesses];
 
             updates.feedback = { player: me, type: status, value: val };
             
             if (status === 'WIN') updates.winner = me;
             else updates.turn = me === 1 ? 2 : 1;
 
-            // Push calculation to server
+            roomRef.update(updates);
+        }
+
+        function requestRematch() {
+            const updates = {};
+            
+            // Mark myself as ready for a rematch
+            if (me === 1) updates.p1Rematch = true;
+            else updates.p2Rematch = true;
+            
+            // Check if the other player already said yes
+            const opponentWantsRematch = me === 1 ? state.p2Rematch : state.p1Rematch;
+            
+            if (opponentWantsRematch) {
+                // Both want to play! Reset the game board entirely.
+                updates.p1Ready = false;
+                updates.p2Ready = false;
+                updates.gameStarted = false;
+                updates.turn = 1;
+                updates.winner = null;
+                updates.p1Secret = 0;
+                updates.p2Secret = 0;
+                updates.p1Guesses = [];
+                updates.p2Guesses = [];
+                updates.p1Rematch = false;
+                updates.p2Rematch = false;
+                updates.feedback = { type: 'START', player: 0, value: null };
+                
+                // Re-enable local UI for next round
+                document.getElementById('secretInput').value = '';
+                document.getElementById('secretBtn').disabled = false;
+                document.getElementById('secretBtn').textContent = "Lock In";
+            }
+            
             roomRef.update(updates);
         }
 
@@ -371,7 +437,7 @@
                 tInd.className = state.winner ? 'turn-indicator' : `turn-indicator turn-p${state.turn}`;
                 if (state.winner) tInd.style.backgroundColor = '#10b981';
 
-                document.getElementById('targetHint').textContent = state.turn === 1 ? "Guessing Player 2's Number" : "Guessing Player 1's Number";
+                document.getElementById('targetHint').textContent = state.winner ? "The secrets are out!" : (state.turn === 1 ? "Guessing Player 2's Number" : "Guessing Player 1's Number");
                 
                 const fbEl = document.getElementById('feedback');
                 if (state.feedback.type === 'START') {
@@ -391,21 +457,55 @@
                 document.getElementById('p1List').innerHTML = state.p1Guesses.map(formatGuessHTML).join('');
                 document.getElementById('p2List').innerHTML = state.p2Guesses.map(formatGuessHTML).join('');
 
-                const btn = document.getElementById('submitBtn');
-                const inp = document.getElementById('guessInput');
+                // Control UI states based on if the game is over
+                if (state.winner) {
+                    // Hide active input, show game over screen
+                    document.getElementById('activePlaySection').style.display = 'none';
+                    document.getElementById('gameOverSection').style.display = 'block';
+                    
+                    // Reveal the Secrets
+                    document.getElementById('p1RevealText').textContent = state.p1Secret;
+                    document.getElementById('p2RevealText').textContent = state.p2Secret;
+                    
+                    // Handle Rematch Button Logic
+                    const rmtchBtn = document.getElementById('rematchBtn');
+                    const iWantRematch = me === 1 ? state.p1Rematch : state.p2Rematch;
+                    const theyWantRematch = me === 1 ? state.p2Rematch : state.p1Rematch;
 
-                if (!isMyTurn) {
-                    btn.disabled = true; inp.disabled = true;
-                    btn.textContent = state.winner ? "Finished" : "Waiting...";
+                    if (iWantRematch) {
+                        rmtchBtn.textContent = "Waiting for Opponent...";
+                        rmtchBtn.disabled = true;
+                        rmtchBtn.style.backgroundColor = '#94a3b8';
+                    } else if (theyWantRematch) {
+                        rmtchBtn.textContent = "Accept Rematch";
+                        rmtchBtn.disabled = false;
+                        rmtchBtn.style.backgroundColor = '#10b981'; // Green call to action
+                    } else {
+                        rmtchBtn.textContent = "Play Again";
+                        rmtchBtn.disabled = false;
+                        rmtchBtn.style.backgroundColor = 'var(--primary)';
+                    }
+
+                    if (!confettiFired && state.winner === me) {
+                        fireConfetti();
+                        confettiFired = true;
+                    }
                 } else {
-                    btn.disabled = false; inp.disabled = false;
-                    btn.textContent = "Guess";
-                    inp.focus();
-                }
+                    // Regular active play state
+                    document.getElementById('activePlaySection').style.display = 'flex';
+                    document.getElementById('gameOverSection').style.display = 'none';
+                    
+                    const btn = document.getElementById('submitBtn');
+                    const inp = document.getElementById('guessInput');
 
-                if (state.winner && !confettiFired) {
-                    if (state.winner === me) fireConfetti();
-                    confettiFired = true;
+                    if (!isMyTurn) {
+                        btn.disabled = true; inp.disabled = true;
+                        btn.textContent = "Waiting...";
+                    } else {
+                        btn.disabled = false; inp.disabled = false;
+                        btn.textContent = "Guess";
+                        inp.focus();
+                    }
                 }
             }
         }
